@@ -1,0 +1,102 @@
+name: Docker Image CI1
+
+# 事件
+on:
+  # 自动触发事件
+  push:
+    branches-ignore: ['master']
+  # 手动触发事件
+  workflow_dispatch:
+    inputs:
+      build_environment:
+        required: true
+        description: 'Use build environment from'
+        default: 'false'
+        type: choice
+        options:
+          - false
+          - true
+
+# 设置环境变量
+env:
+  GITHUB_REGISTRY: ghcr.io
+  NODE_BUILD: production
+
+  # 此变量用于区分构建所处环境
+  WEB_IMAGE_IS_PRODUCTION: ${{ inputs.build_environment }}
+  GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+  GITHUB_IMAGE_PATH: ghcr.io/${{ github.repository }}
+
+# 具体任务
+jobs:
+  # 任务名称:构建打包web服务镜像
+  build-and-push-node-image:
+    # 定义要运行作业的计算机类型
+    runs-on: ubuntu-latest
+    # 设置权限作用域和访问权限值
+    permissions:
+      # 授予只读权限给予上下文
+      contents: read
+      # 授予packages包管理器写入权限
+      packages: write
+      # 授予关于仓库的只读权限
+      repository-projects: read
+
+    # 打印出上下文信息-GitHub上下文
+    steps:
+      - name: Dump GitHub context
+        id: github_context_step
+        run: echo '${{ toJSON(github) }}'
+
+      # 拉取代码
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # 登录GitHub Packages注册表
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2.0.0
+        with:
+          registry: ${{ env.GITHUB_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 构建node环境
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16.15.0'
+
+      # 打包web
+      - name: Build Project
+        run: export BRANCH_NAME=${{ github.ref_name }}
+
+      - name: View folders
+        run: ls -la
+
+      # 如果指定了tag，会自动将其加上，如果没有指定tag，with tags不会生效
+      # 提取镜像信息，用于后续镜像打包
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.GITHUB_IMAGE_PATH }}-web
+
+      # 基于指定Dockerfile文件构建进行并上传到GitHub Packages
+      - name: Build and push Docker image(Default)
+        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        with:
+          # 将构建的上下文定义为位于指定路径中的文件集。
+          context: ./
+          file: devops/Dockerfile
+          # 如果设置为 true，则映像将推送到注册表（如果成功构建）。
+          push: true
+          # 它们由 metadata-action 的输出填充。
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # - name: Push to the development Harbor
+      #   if: ${{ env.WEB_IMAGE_IS_PRODUCTION == 'false' || env.WEB_IMAGE_IS_PRODUCTION}}
+      #   run: |
+      #     curl ${{ env.JENKINS_URL }}/job/development/job/ones-cn/job/sync-ones-cn-images/buildWithParameters \
+      #       --user github-action@ones.ai:${{ secrets.TOKEN_OF_GITHUB_ACTION_AT_CD_JENKINS }} \
+      #       --data TAG_NAME=${{ github.ref_name }} --data TAG_IMAGE=web
